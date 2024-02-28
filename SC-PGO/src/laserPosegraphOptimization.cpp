@@ -130,8 +130,8 @@ ros::Publisher pubLoopScanLocal, pubLoopSubmapLocal;
 ros::Publisher pubOdomRepubVerifier;
 
 std::string save_directory;
-std::string pgKITTIformat, pgScansDirectory;
-std::string odomKITTIformat;
+std::string pgKITTIformat, pgScansDirectory, pgTUMformat;
+std::string odomKITTIformat, odomTUMformat;
 std::fstream pgTimeSaveStream;
 
 std::string padZeros(int val, int num_digits = 6) {
@@ -144,6 +144,38 @@ gtsam::Pose3 Pose6DtoGTSAMPose3(const Pose6D& p)
 {
     return gtsam::Pose3( gtsam::Rot3::RzRyRx(p.roll, p.pitch, p.yaw), gtsam::Point3(p.x, p.y, p.z) );
 } // Pose6DtoGTSAMPose3
+
+gtsam::Pose3 trans2gtsamPose(Eigen::Matrix4f matrix_)
+{
+    gtsam::Rot3 rot3(matrix_(0,0), matrix_(0,1), matrix_(0,2),\
+                     matrix_(1,0), matrix_(1,1), matrix_(1,2),\
+                     matrix_(2,0), matrix_(2,1), matrix_(2,2));
+    return gtsam::Pose3(rot3, gtsam::Point3(matrix_(0,3), matrix_(1,3), matrix_(2,3)));
+}
+
+Eigen::Matrix4f gtsam2transPose(gtsam::Pose3 pose)
+{
+    Eigen::Matrix4f matrix = Eigen::Matrix4f::Identity();
+    matrix(0,3) = pose.translation().x();
+    matrix(1,3) = pose.translation().y();
+    matrix(2,3) = pose.translation().z();
+    matrix.block<3,3>(0,0) = pose.rotation().matrix().cast<float>();
+    return matrix;
+}
+
+void saveOdometryVerticesTUMformat(std::string _filename) {
+    std::fstream stream(_filename.c_str(), std::fstream::out);
+    for (const auto& _pose6d: keyframePoses) {
+        Eigen::AngleAxisd rollAngle(AngleAxisd(_pose6d.roll, Vector3d::UnitX()));
+        Eigen::AngleAxisd pitchAngle(AngleAxisd(_pose6d.pitch, Vector3d::UnitY()));
+        Eigen::AngleAxisd yawAngle(AngleAxisd(_pose6d.yaw, Vector3d::UnitZ()));
+        Eigen::Quaterniond quaternion;
+        quaternion = yawAngle * pitchAngle * rollAngle;
+
+        stream << _pose6d.x << " " << _pose6d.y << " " << _pose6d.z << " " << quaternion.x() << " "
+               << quaternion.y() << " " << quaternion.z() << " " << quaternion.w() << std::endl;
+    }
+}
 
 void saveOdometryVerticesKITTIformat(std::string _filename)
 {
@@ -160,6 +192,22 @@ void saveOdometryVerticesKITTIformat(std::string _filename)
         stream << col1.x() << " " << col2.x() << " " << col3.x() << " " << t.x() << " "
                << col1.y() << " " << col2.y() << " " << col3.y() << " " << t.y() << " "
                << col1.z() << " " << col2.z() << " " << col3.z() << " " << t.z() << std::endl;
+    }
+}
+
+void saveOptimizedVerticesTUMformat(gtsam::Values _estimates, std::string _filename) {
+    using namespace gtsam;
+    std::fstream stream(_filename.c_str(), std::fstream::out);
+    for(const auto& key_value: _estimates) {
+        auto p = dynamic_cast<const GenericValue<Pose3>*>(&key_value.value);
+        if (!p) continue;
+        const Pose3& pose = p->value();
+        Point3 t = pose.translation();
+        Eigen::Matrix3d R = pose.rotation().matrix();
+        Eigen::Quaterniond quaternion(R);
+
+        stream << t.x() << " " << t.y() << " " << t.z() << " " << quaternion.x() << " "
+               << quaternion.y() << " " << quaternion.z() << " " << quaternion.w() << std::endl;
     }
 }
 
@@ -724,6 +772,8 @@ void process_isam(void)
 
             saveOptimizedVerticesKITTIformat(isamCurrentEstimate, pgKITTIformat); // pose
             saveOdometryVerticesKITTIformat(odomKITTIformat); // pose
+            saveOptimizedVerticesTUMformat(isamCurrentEstimate, pgTUMformat); // pose
+            saveOdometryVerticesTUMformat(odomTUMformat); // pose
         }
     }
 }
@@ -772,9 +822,11 @@ int main(int argc, char **argv)
 	ros::init(argc, argv, "laserPGO");
 	ros::NodeHandle nh;
 
-	nh.param<std::string>("save_directory", save_directory, "/"); // pose assignment every k m move 
+	nh.param<std::string>("save_directory", save_directory, "~/files/project/catkin_fastlio_slam/"); // pose assignment every k m move 
     pgKITTIformat = save_directory + "optimized_poses.txt";
     odomKITTIformat = save_directory + "odom_poses.txt";
+    pgTUMformat = save_directory + "optimized_poses_tum.txt";
+    odomTUMformat = save_directory + "odom_poses_tum.txt";
     pgTimeSaveStream = std::fstream(save_directory + "times.txt", std::fstream::out); 
     pgTimeSaveStream.precision(std::numeric_limits<double>::max_digits10);
     pgScansDirectory = save_directory + "Scans/";

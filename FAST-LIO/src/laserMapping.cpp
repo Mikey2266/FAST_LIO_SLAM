@@ -360,6 +360,8 @@ void imu_cbk(const sensor_msgs::Imu::ConstPtr &msg_in)
     sig_buffer.notify_all();
 }
 
+double lidar_mean_scantime = 0.0;
+int scan_num = 0;
 bool sync_packages(MeasureGroup &meas)
 {
     if (lidar_buffer.empty() || imu_buffer.empty()) {
@@ -370,13 +372,33 @@ bool sync_packages(MeasureGroup &meas)
     if(!lidar_pushed)
     {
         meas.lidar = lidar_buffer.front();
-        if(meas.lidar->points.size() <= 1)
-        {
-            lidar_buffer.pop_front();
-            return false;
-        }
         meas.lidar_beg_time = time_buffer.front();
-        lidar_end_time = meas.lidar_beg_time + meas.lidar->points.back().curvature / double(1000);
+
+        //更新结束时刻的时间
+        if (meas.lidar->points.size() <= 1)
+        {
+            lidar_end_time = meas.lidar_beg_time + lidar_mean_scantime;
+            ROS_WARN("Too few input point cloud!\n");
+        }
+        else if (meas.lidar->points.back().curvature/double(1000) < 0.5*lidar_mean_scantime)
+        {
+            lidar_end_time = meas.lidar_beg_time + lidar_mean_scantime;
+        }
+        else
+        {
+            scan_num++;
+            lidar_end_time = meas.lidar_beg_time + meas.lidar->points.back().curvature / double(1000);
+
+            lidar_mean_scantime += (meas.lidar->points.back().curvature / double(1000) - lidar_mean_scantime) / scan_num;
+        }
+		meas.lidar_end_time = lidar_end_time;
+//        if(meas.lidar->points.size() <= 1)
+//        {
+//            lidar_buffer.pop_front();
+//            return false;
+//        }
+//        meas.lidar_beg_time = time_buffer.front();
+//        lidar_end_time = meas.lidar_beg_time + meas.lidar->points.back().curvature / double(1000);
         lidar_pushed = true;
     }
 
